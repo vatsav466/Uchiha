@@ -62,10 +62,11 @@ def main():
 
 async def _db_engine():
     # Import after chdir so settings picks up the right .alg_env
-    import urdhva_base.settings
+    # urdhva_base.settings is the Settings singleton (re-exported from __init__.py)
+    import urdhva_base
     from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
 
-    db_url = str(urdhva_base.settings.settings.db_urls["postgres_async"][0])
+    db_url = str(urdhva_base.settings.db_urls["postgres_async"][0])
     safe_url = db_url.split("@")[0].split("//")[0] + "//***@" + db_url.split("@")[-1]
     print(f"[info] Connecting to: {safe_url}")
 
@@ -88,11 +89,11 @@ async def _decrypts(types, stored_pw) -> bool:
 
 
 async def _reset(username: str, new_password: str):
-    import urdhva_base.settings
+    import urdhva_base
     import urdhva_base.types as types
     from sqlalchemy import text
 
-    salt = urdhva_base.settings.settings.password_salt
+    salt = urdhva_base.settings.password_salt
     print(f"[info] password_salt in use: {repr(salt)}")
 
     engine, session_factory = await _db_engine()
@@ -139,11 +140,11 @@ async def _reset(username: str, new_password: str):
 
 
 async def _reset_all(new_password: str):
-    import urdhva_base.settings
+    import urdhva_base
     import urdhva_base.types as types
     from sqlalchemy import text
 
-    salt = urdhva_base.settings.settings.password_salt
+    salt = urdhva_base.settings.password_salt
     print(f"[info] password_salt in use: {repr(salt)}")
     print(f"[info] Resetting ALL users whose stored password does NOT decrypt with this salt.")
 
@@ -181,11 +182,11 @@ async def _reset_all(new_password: str):
 
 
 async def _check_all():
-    import urdhva_base.settings
+    import urdhva_base
     import urdhva_base.types as types
     from sqlalchemy import text
 
-    salt = urdhva_base.settings.settings.password_salt
+    salt = urdhva_base.settings.password_salt
     print(f"[info] password_salt in use: {repr(salt)}")
 
     engine, session_factory = await _db_engine()
