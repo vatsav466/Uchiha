@@ -57,7 +57,7 @@ jobs:
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     runs-on: ubuntu-latest
     steps:
-      - name: SSH and deploy to server
+      - name: SSH and deploy to target server
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.DEPLOY_HOST }}
@@ -68,6 +68,7 @@ jobs:
             set -e
             IMAGE=$(echo "ghcr.io/${{ github.repository }}" | tr '[:upper:]' '[:lower:]')
 
+            echo "Logging into container registry..."
             echo "${{ secrets.GHCR_PAT }}" | sudo docker login ghcr.io \
               -u "${{ github.actor }}" \
               --password-stdin
@@ -75,12 +76,12 @@ jobs:
             echo "Pulling latest Docker image..."
             sudo docker pull ${IMAGE}:latest
 
-            echo "Cleaning up existing container..."
+            echo "Stopping old application container..."
             sudo docker stop app-container || true
             sudo docker rm app-container || true
             sudo mkdir -p /opt/digitaltwin_images
 
-            echo "Launching updated app container..."
+            echo "Launching new container on host network..."
             sudo docker run -d \
               --name app-container \
               --restart unless-stopped \
@@ -88,17 +89,19 @@ jobs:
               -v /opt/digitaltwin_images:/opt/digitaltwin_images \
               ${IMAGE}:latest
 
-            echo "Waiting for Nginx web server on port 5378..."
+            echo "================================================="
+            echo "STAGE 1: Checking Frontend Dashboard (Port 5378)..."
+            echo "================================================="
             for i in $(seq 1 20); do
-              STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:5378/ || echo "000")
-              if [ "$STATUS" = "200" ]; then
-                echo "Nginx frontend server is online (HTTP $STATUS)"
+              FRONTEND_STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:5378/ || echo "000")
+              if [ "$FRONTEND_STATUS" = "200" ]; then
+                echo "✅ Full NOVEX dashboard is live at http://165.101.248.89:5378/ (HTTP $FRONTEND_STATUS)"
                 break
               fi
-              echo "Waiting for web server (HTTP $STATUS), retrying ($i/20)..."
+              echo "Waiting for frontend (HTTP $FRONTEND_STATUS), retry ($i/20)..."
               sleep 3
               if [ "$i" -eq 20 ]; then
-                echo "Nginx failed to respond."
+                echo "❌ Frontend failed to start on port 5378."
                 sudo docker exec app-container supervisorctl -c /etc/supervisor/supervisord.conf status || true
                 sudo docker exec app-container cat /var/log/api.log || true
                 sudo docker logs app-container
@@ -106,31 +109,46 @@ jobs:
               fi
             done
 
-            echo "Waiting 10 seconds for FastAPI models and API routers to register..."
-            sleep 10
+            echo "Allowing FastAPI backend process to register all model routes..."
+            sleep 5
 
-            echo "Verifying FastAPI Swagger Documentation (/docs)..."
-            DOCS_STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:5378/docs || echo "000")
-            if [ "$DOCS_STATUS" = "200" ] || [ "$DOCS_STATUS" = "307" ]; then
-              echo "Swagger UI accessible (HTTP $DOCS_STATUS)"
+            echo "================================================="
+            echo "STAGE 2: Checking Direct FastAPI Documentation (Port 8002)..."
+            echo "================================================="
+            DIRECT_DOCS_STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8002/docs || echo "000")
+            if [ "$DIRECT_DOCS_STATUS" = "200" ] || [ "$DIRECT_DOCS_STATUS" = "307" ]; then
+              echo "✅ Direct FastAPI docs reachable at http://165.101.248.89:8002/docs (HTTP $DIRECT_DOCS_STATUS)"
             else
-              echo "Swagger endpoint error (HTTP $DOCS_STATUS)."
-              echo "=== Supervisor Status ==="
+              echo "❌ Direct FastAPI docs failed on port 8002 (HTTP $DIRECT_DOCS_STATUS)."
               sudo docker exec app-container supervisorctl -c /etc/supervisor/supervisord.conf status || true
-              echo "=== API Logs ==="
               sudo docker exec app-container cat /var/log/api.log || true
-              echo "=== Docker Container Logs ==="
               sudo docker logs app-container
               exit 1
             fi
 
-            echo "Validating OpenAPI JSON schema endpoint (/openapi.json)..."
-            OPENAPI_STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:5378/openapi.json || echo "000")
-            if [ "$OPENAPI_STATUS" = "200" ]; then
-              echo "All FastAPI endpoints, routes, and schemas loaded successfully (HTTP $OPENAPI_STATUS)!"
+            echo "================================================="
+            echo "STAGE 3: Checking Nginx Proxied Swagger UI (Port 5378/docs)..."
+            echo "================================================="
+            PROXIED_DOCS_STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:5378/docs || echo "000")
+            if [ "$PROXIED_DOCS_STATUS" = "200" ] || [ "$PROXIED_DOCS_STATUS" = "307" ]; then
+              echo "✅ Nginx proxied Swagger UI reachable at http://165.101.248.89:5378/docs (HTTP $PROXIED_DOCS_STATUS)"
             else
-              echo "Warning: openapi.json returned HTTP $OPENAPI_STATUS"
+              echo "❌ Proxied Swagger UI failed on port 5378 (HTTP $PROXIED_DOCS_STATUS)."
+              sudo docker exec app-container supervisorctl -c /etc/supervisor/supervisord.conf status || true
+              sudo docker exec app-container cat /var/log/api.log || true
+              sudo docker logs app-container
+              exit 1
             fi
 
-            echo "Pruning unused Docker images..."
+            echo "================================================="
+            echo "STAGE 4: Verifying OpenAPI JSON Schema Generation..."
+            echo "================================================="
+            OPENAPI_STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8002/openapi.json || echo "000")
+            if [ "$OPENAPI_STATUS" = "200" ]; then
+              echo "✅ OpenAPI schema loaded successfully with all routes!"
+            else
+              echo "⚠️ Warning: openapi.json returned HTTP $OPENAPI_STATUS"
+            fi
+
+            echo "Pruning unused images..."
             sudo docker image prune -f
