@@ -1,4 +1,5 @@
 name: Build and Deploy Application
+
 on:
   push:
     branches:
@@ -76,12 +77,7 @@ jobs:
             sudo docker rm app-container || true
             sudo mkdir -p /opt/digitaltwin_images
 
-            # --network host is required: the api process connects to Redis
-            # at localhost:6379, which is the HOST's Redis. Without
-            # --network host, "localhost" inside the container has no
-            # Redis listening on it and the api process fails to start
-            # (this was the actual cause of the repeated "exit status 1"
-            # crash loop and the resulting HTTP 500s from nginx).
+            # --network host connects container to the host network (Redis, DBs, local Nginx proxying)
             sudo docker run -d \
               --name app-container \
               --restart unless-stopped \
@@ -89,45 +85,43 @@ jobs:
               -v /opt/digitaltwin_images:/opt/digitaltwin_images \
               ${IMAGE}:latest
 
-            echo "Waiting for application..."
+            echo "Waiting for frontend service..."
             for i in $(seq 1 15); do
               STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:5378/ || echo "000")
               if [ "$STATUS" = "200" ]; then
                 echo "Frontend is up (HTTP $STATUS)"
                 break
               fi
-              echo "Not ready yet (HTTP $STATUS), retrying ($i/15)..."
+              echo "Frontend not ready (HTTP $STATUS), retrying ($i/15)..."
               sleep 5
               if [ "$i" -eq 15 ]; then
                 echo "Frontend failed to start (last HTTP status: $STATUS)."
-                echo "--- Checking if frontend files exist in container ---"
-                sudo docker exec app-container ls -la /usr/share/nginx/html || echo "Path /usr/share/nginx/html not found in container"
-                echo "--- nginx config test ---"
-                sudo docker exec app-container nginx -t || true
-                echo "--- supervisord process status ---"
                 sudo docker exec app-container supervisorctl status || true
-                echo "--- api process log tail ---"
                 sudo docker exec app-container tail -n 100 /var/log/api.log || true
-                echo "--- Full container logs ---"
                 sudo docker logs app-container
                 exit 1
               fi
             done
 
-            echo "Checking Swagger..."
+            echo "Checking FastAPI Swagger Docs endpoint..."
             DOCS_STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:5378/docs || echo "000")
-            if [ "$DOCS_STATUS" = "000" ] || [ "$DOCS_STATUS" = "404" ]; then
-              echo "Swagger endpoint unreachable or missing (HTTP $DOCS_STATUS)."
+            if [ "$DOCS_STATUS" = "200" ] || [ "$DOCS_STATUS" = "307" ]; then
+              echo "Swagger endpoint is active and serving OpenAPI schema (HTTP $DOCS_STATUS)"
+            else
+              echo "Swagger endpoint unreachable or misconfigured (HTTP $DOCS_STATUS)."
               sudo docker exec app-container supervisorctl status || true
               sudo docker exec app-container tail -n 100 /var/log/api.log || true
               sudo docker logs app-container
               exit 1
-            else
-              echo "Swagger endpoint reachable (HTTP $DOCS_STATUS)"
             fi
 
-            echo "Checking API proxy..."
-            API_STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:5378/api/ || echo "000")
-            echo "API endpoint responded with HTTP $API_STATUS"
+            echo "Checking FastAPI OpenAPI JSON schema generation..."
+            OPENAPI_STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:5378/openapi.json || echo "000")
+            if [ "$OPENAPI_STATUS" = "200" ]; then
+              echo "All FastAPI endpoint schemas loaded successfully (HTTP $OPENAPI_STATUS)"
+            else
+              echo "Warning: openapi.json responded with HTTP $OPENAPI_STATUS"
+            fi
 
+            echo "Pruning unused docker images..."
             sudo docker image prune -f
