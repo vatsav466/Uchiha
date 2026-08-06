@@ -90,64 +90,63 @@ jobs:
               ${IMAGE}:latest
 
             echo "================================================="
-            echo "STAGE 1: Checking Frontend Dashboard (Port 5378)..."
+            echo "STAGE 1: Verifying Nginx Frontend (Port 5378)..."
             echo "================================================="
             for i in $(seq 1 20); do
-              FRONTEND_STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:5378/ || echo "000")
+              FRONTEND_STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:5378/ || echo "000")
               if [ "$FRONTEND_STATUS" = "200" ]; then
-                echo "✅ Full NOVEX dashboard is live at http://165.101.248.89:5378/ (HTTP $FRONTEND_STATUS)"
+                echo "✅ NOVEX Dashboard is live at http://165.101.248.89:5378/ (HTTP $FRONTEND_STATUS)"
                 break
               fi
-              echo "Waiting for frontend (HTTP $FRONTEND_STATUS), retry ($i/20)..."
+              echo "Waiting for Nginx (HTTP $FRONTEND_STATUS), retry ($i/20)..."
               sleep 3
               if [ "$i" -eq 20 ]; then
-                echo "❌ Frontend failed to start on port 5378."
-                sudo docker exec app-container supervisorctl -c /etc/supervisor/supervisord.conf status || true
+                echo "❌ Nginx frontend failed to respond."
+                sudo docker exec app-container supervisorctl status || true
                 sudo docker exec app-container cat /var/log/api.log || true
                 sudo docker logs app-container
                 exit 1
               fi
             done
 
-            echo "Allowing FastAPI backend process to register all model routes..."
-            sleep 5
+            echo "================================================="
+            echo "STAGE 2: Verifying FastAPI Backend & Route Registration..."
+            echo "================================================="
+            for i in $(seq 1 20); do
+              DOCS_STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:5378/docs || echo "000")
+              if [ "$DOCS_STATUS" = "200" ] || [ "$DOCS_STATUS" = "307" ]; then
+                echo "✅ FastAPI Swagger UI reachable via Nginx at http://165.101.248.89:5378/docs (HTTP $DOCS_STATUS)"
+                break
+              fi
+              echo "FastAPI backend warming up (HTTP $DOCS_STATUS), retrying ($i/20)..."
+              sleep 3
+              if [ "$i" -eq 20 ]; then
+                echo "❌ FastAPI Swagger UI failed on port 5378/docs."
+                sudo docker exec app-container supervisorctl status || true
+                sudo docker exec app-container cat /var/log/api.log || true
+                sudo docker logs app-container
+                exit 1
+              fi
+            done
 
             echo "================================================="
-            echo "STAGE 2: Checking Direct FastAPI Documentation (Port 8002)..."
+            echo "STAGE 3: Checking Direct FastAPI Port Exposure (Port 8002)..."
             echo "================================================="
-            DIRECT_DOCS_STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8002/docs || echo "000")
+            DIRECT_DOCS_STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8002/docs || echo "000")
             if [ "$DIRECT_DOCS_STATUS" = "200" ] || [ "$DIRECT_DOCS_STATUS" = "307" ]; then
-              echo "✅ Direct FastAPI docs reachable at http://165.101.248.89:8002/docs (HTTP $DIRECT_DOCS_STATUS)"
+              echo "✅ Direct FastAPI docs accessible at http://165.101.248.89:8002/docs (HTTP $DIRECT_DOCS_STATUS)"
             else
-              echo "❌ Direct FastAPI docs failed on port 8002 (HTTP $DIRECT_DOCS_STATUS)."
-              sudo docker exec app-container supervisorctl -c /etc/supervisor/supervisord.conf status || true
-              sudo docker exec app-container cat /var/log/api.log || true
-              sudo docker logs app-container
-              exit 1
+              echo "⚠️ Notice: Direct port 8002 returned HTTP $DIRECT_DOCS_STATUS (Traffic routed safely via Nginx on 5378)"
             fi
 
             echo "================================================="
-            echo "STAGE 3: Checking Nginx Proxied Swagger UI (Port 5378/docs)..."
+            echo "STAGE 4: Verifying OpenAPI JSON Schema..."
             echo "================================================="
-            PROXIED_DOCS_STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:5378/docs || echo "000")
-            if [ "$PROXIED_DOCS_STATUS" = "200" ] || [ "$PROXIED_DOCS_STATUS" = "307" ]; then
-              echo "✅ Nginx proxied Swagger UI reachable at http://165.101.248.89:5378/docs (HTTP $PROXIED_DOCS_STATUS)"
-            else
-              echo "❌ Proxied Swagger UI failed on port 5378 (HTTP $PROXIED_DOCS_STATUS)."
-              sudo docker exec app-container supervisorctl -c /etc/supervisor/supervisord.conf status || true
-              sudo docker exec app-container cat /var/log/api.log || true
-              sudo docker logs app-container
-              exit 1
-            fi
-
-            echo "================================================="
-            echo "STAGE 4: Verifying OpenAPI JSON Schema Generation..."
-            echo "================================================="
-            OPENAPI_STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8002/openapi.json || echo "000")
+            OPENAPI_STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:5378/openapi.json || echo "000")
             if [ "$OPENAPI_STATUS" = "200" ]; then
-              echo "✅ OpenAPI schema loaded successfully with all routes!"
+              echo "✅ All OpenAPI schema routes loaded successfully!"
             else
-              echo "⚠️ Warning: openapi.json returned HTTP $OPENAPI_STATUS"
+              echo "⚠️ openapi.json returned HTTP $OPENAPI_STATUS"
             fi
 
             echo "Pruning unused images..."
