@@ -1,13 +1,18 @@
 ##############################################################################
-# docker-compose.yml — local development / testing
+# docker-compose.yml — NOVEX local development / testing
 #
 # Usage:
-#   docker compose up --build
+#   docker compose up --build            # build & start
+#   docker compose up -d                 # detached
+#   docker compose logs -f novex         # follow logs
+#   docker compose down                  # stop & remove containers
 #
-# Then open:
-#   http://localhost:5378/     — NOVEX frontend
-#   http://localhost:5378/docs — Swagger UI (proxied through nginx)
-#   http://localhost:8002/docs — FastAPI direct
+# URLs once running:
+#   http://localhost:5378/       — NOVEX React frontend
+#   http://localhost:5378/health — Nginx healthcheck
+#   http://localhost:5378/docs   — FastAPI Swagger UI (proxied via nginx)
+#   http://localhost:5378/redoc  — FastAPI ReDoc (proxied via nginx)
+#   http://localhost:8002/docs   — FastAPI direct access
 ##############################################################################
 
 version: "3.9"
@@ -19,19 +24,20 @@ services:
       dockerfile: Dockerfile
     container_name: novex_dev
     ports:
-      - "5378:5378"      # nginx → frontend + proxied /api and /docs
-      - "8002:8002"      # FastAPI direct → /docs, /redoc, /openapi.json
+      - "5378:5378"   # nginx → frontend + proxied /api/, /docs, /redoc
+      - "8002:8002"   # FastAPI direct
     environment:
       - MODE=prod
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:5378/health"]
+      test: ["CMD", "curl", "-sf", "http://localhost:5378/health"]
       interval: 30s
       timeout: 10s
       retries: 5
-      start_period: 60s
+      start_period: 90s   # allow redis + api (10 s startsecs) + nginx to come up
     volumes:
-      # Mount the .alg_env at runtime so secrets are never baked into the image
+      # Mount the .alg_env at runtime so secrets are never baked into the image.
+      # Remove this line if you want to use the .alg_env that was COPY'd during build.
       - ./backend/api_manager/.alg_env:/opt/ceg/algo/api_manager/.alg_env:ro
       # Persist digital-twin model assets across container restarts
       - /opt/digitaltwin_images:/opt/digitaltwin_images
