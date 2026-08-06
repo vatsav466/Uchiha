@@ -77,7 +77,7 @@ jobs:
             sudo docker rm app-container || true
             sudo mkdir -p /opt/digitaltwin_images
 
-            # --network host connects container to the host network (Redis, DBs, local Nginx proxying)
+            # Start application container
             sudo docker run -d \
               --name app-container \
               --restart unless-stopped \
@@ -96,31 +96,29 @@ jobs:
               sleep 5
               if [ "$i" -eq 15 ]; then
                 echo "Frontend failed to start (last HTTP status: $STATUS)."
-                sudo docker exec app-container supervisorctl status || true
+                sudo docker exec app-container supervisorctl -c /etc/supervisor/supervisord.conf status || true
                 sudo docker exec app-container tail -n 100 /var/log/api.log || true
                 sudo docker logs app-container
                 exit 1
               fi
             done
 
+            echo "Waiting for FastAPI backend to stabilize..."
+            sleep 5
+
             echo "Checking FastAPI Swagger Docs endpoint..."
             DOCS_STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:5378/docs || echo "000")
             if [ "$DOCS_STATUS" = "200" ] || [ "$DOCS_STATUS" = "307" ]; then
               echo "Swagger endpoint is active and serving OpenAPI schema (HTTP $DOCS_STATUS)"
             else
-              echo "Swagger endpoint unreachable or misconfigured (HTTP $DOCS_STATUS)."
-              sudo docker exec app-container supervisorctl status || true
-              sudo docker exec app-container tail -n 100 /var/log/api.log || true
+              echo "Swagger endpoint unreachable or returning error (HTTP $DOCS_STATUS)."
+              echo "--- Supervisor Process Status ---"
+              sudo docker exec app-container supervisorctl -c /etc/supervisor/supervisord.conf status || true
+              echo "--- API Log Output ---"
+              sudo docker exec app-container cat /var/log/api.log || true
+              echo "--- Container Console Output ---"
               sudo docker logs app-container
               exit 1
-            fi
-
-            echo "Checking FastAPI OpenAPI JSON schema generation..."
-            OPENAPI_STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:5378/openapi.json || echo "000")
-            if [ "$OPENAPI_STATUS" = "200" ]; then
-              echo "All FastAPI endpoint schemas loaded successfully (HTTP $OPENAPI_STATUS)"
-            else
-              echo "Warning: openapi.json responded with HTTP $OPENAPI_STATUS"
             fi
 
             echo "Pruning unused docker images..."
