@@ -392,9 +392,32 @@ class AuthenticationManager:
             for user in data["data"]:
                 if user["username"].lower() == username.lower():
                     return False, "user exists"
-        await hpcl_ceg_model.UsersCreate(**{"username": username.lower(), "password": password, "role": role,
-                                      "first_name": first_name, "last_name": last_name, "employee_id": employee_id,
-                                      "status": True}).create()
+
+        # Build a complete UsersCreate payload. The model requires these columns;
+        # passing only {username,password,role,...} previously caused a 500.
+        role_list = list(role) if isinstance(role, (list, tuple, set)) else [str(role)]
+        await hpcl_ceg_model.UsersCreate(**{
+            "username": username.lower(),
+            "email": f"{username.lower()}@novex.local",
+            "first_name": first_name,
+            "last_name": last_name,
+            "password": password,
+            "employee_id": employee_id,
+            "bu": [],
+            "sap_id": [],
+            "system_role": role_list,
+            "novex_role": role_list,
+            "state": [],
+            "zone": [],
+            "sales_area": [],
+            "is_ad_user": False,
+            "status": status,
+            "manual_user": True,
+            "contact_number": "",
+            "mfa": False,
+            "login_user_id": username.lower(),
+            "file_path": "",
+        }).create()
         return True, "User created successfully"
 
     @classmethod

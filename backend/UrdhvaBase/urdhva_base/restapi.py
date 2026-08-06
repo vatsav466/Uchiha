@@ -14,6 +14,7 @@ How it works:
 import os
 import sys
 import json
+import base64
 import types
 import inspect
 import asyncio
@@ -68,25 +69,44 @@ app.add_middleware(
 # ── Session middleware ────────────────────────────────────────────────────────
 class SessionMiddleware(BaseHTTPMiddleware):
     """
-    Reads the session cookie, decrypts it with Fernet, and stores the payload
-    in request.state.session. Downstream handlers can read session data via
-    request.state.session.
+    Reads the session cookie, decrypts it with Fernet, resolves the full session
+    payload (user data) from Redis by cookie_id, and stores it in
+    request.state.session. Downstream handlers can read session data via
+    request.state.session and urdhva_base.ctx / context['rpt'].
     """
 
-    async def dispatch(self, request: Request, call_next):
+    async def _resolve_session(self, cookie_value: str) -> dict:
         from cryptography.fernet import Fernet, InvalidToken
 
+        try:
+            f = Fernet(urdhva_base.settings.fernet_key)
+            decrypted = f.decrypt(cookie_value.encode()).decode()
+            cookie_payload = json.loads(decrypted)
+            cookie_id = cookie_payload.get("cookie_id")
+            if not cookie_id:
+                return {}
+
+            # The cookie only carries {"entity_id","cookie_id"}; the full user
+            # payload lives in Redis under Novex_SessionData_<cookie_id>.
+            rkey = f"Novex_SessionData_{cookie_id}"
+            redis_ins = await urdhva_base.redispool.get_redis_connection()
+            if not await redis_ins.exists(rkey):
+                return {}
+            raw = await redis_ins.get(rkey)
+            session_data = json.loads(base64.urlsafe_b64decode(raw).decode())
+            session_data["cookie_id"] = cookie_id
+            session_data["entity_id"] = cookie_payload.get("entity_id", "Novex")
+            return session_data
+        except (InvalidToken, Exception):
+            # Invalid / expired session — treat as anonymous
+            return {}
+
+    async def dispatch(self, request: Request, call_next):
         session_data = {}
         cookie_value = request.cookies.get(urdhva_base.settings.cookie_name)
 
         if cookie_value:
-            try:
-                f = Fernet(urdhva_base.settings.fernet_key)
-                decrypted = f.decrypt(cookie_value.encode()).decode()
-                session_data = json.loads(decrypted)
-            except (InvalidToken, Exception):
-                # Invalid / expired session — treat as anonymous
-                pass
+            session_data = await self._resolve_session(cookie_value)
 
         request.state.session = session_data
 
@@ -108,8 +128,8 @@ app.add_middleware(SessionMiddleware)
 @app.get("/api/session/me", tags=["Session"])
 async def session_me(request: Request):
     """
-    Returns the decrypted session payload (user info) if a valid session cookie
-    is present, or is_authenticated: false otherwise.
+    Returns the resolved session payload (full user info) if a valid session
+    cookie is present, or is_authenticated: false otherwise.
     """
     session = getattr(request.state, "session", {})
     if not session or not session.get("employee_id"):

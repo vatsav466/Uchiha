@@ -19,6 +19,24 @@ db_connection_mapping={"2": {"cred_model": "Databases", "cred_type": "PostgreSQL
 encryption_key='mcMAmuM2wLgNey7hgaCXDsaH__h13R2esSQ7fKvX3ak='
 enable_encrypted_payload=True
 #disable_api_extra_inputs=False
+
+# ── Password encryption salt (CRITICAL for login) ─────────────────────────────
+# Passwords in the `users` table are stored as Fernet tokens derived via HKDF
+# from this salt. It MUST match the salt that was used when the passwords were
+# created. If this DB was migrated from an older deployment that used a
+# different salt, login fails with 401 "Invalid Login Credentials" for every
+# user. In that case either:
+#   1) set this to the ORIGINAL salt from the old deployment, or
+#   2) reset the passwords with the current salt:
+#        docker exec novex_dev /opt/venv/bin/python \
+#          /opt/ceg/algo/api_manager/reset_password.py admin '<NewPassword>'
+password_salt=urdhva_base_secret
+
+# ── LDAP / Active Directory (needed for is_ad_user=True accounts) ─────────────
+# Uncomment and set when AD users must log in with their corporate password.
+#ldap_host=your-ad-server-host
+#ldap_port=389
+#ldap_domain=your.domain.local
 minio_endpoint="http://localhost:9006"
 minio_access_key="minioadmin"
 minio_secret_key="minioadmin"

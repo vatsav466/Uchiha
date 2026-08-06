@@ -139,6 +139,16 @@ jobs:
               echo "⚠️ Notice: Direct port 8002 returned HTTP $DIRECT_DOCS_STATUS (Traffic routed safely via Nginx on 5378)"
             fi
 
+            # Verify uvicorn actually bound 0.0.0.0 so port 8002 is reachable on
+            # the public interface (not just 127.0.0.1). This catches the case
+            # where only the loopback bind exists.
+            echo "Checking whether uvicorn is bound to 0.0.0.0 on port 8002..."
+            if sudo docker exec app-container sh -c "ss -ltnp 2>/dev/null | grep ':8002'" | grep -q "0.0.0.0"; then
+              echo "✅ uvicorn bound to 0.0.0.0:8002 — externally reachable."
+            else
+              echo "⚠️ Port 8002 not bound to 0.0.0.0 — external clients cannot reach /docs directly."
+            fi
+
             echo "================================================="
             echo "STAGE 4: Verifying OpenAPI JSON Schema..."
             echo "================================================="
@@ -148,6 +158,26 @@ jobs:
             else
               echo "⚠️ openapi.json returned HTTP $OPENAPI_STATUS"
             fi
+
+            echo "================================================="
+            echo "STAGE 5: Verifying Backend API Liveness via Nginx..."
+            echo "================================================="
+            API_HEALTH=$(curl -s -m 10 http://127.0.0.1:5378/api/health || echo "unreachable")
+            echo "API /api/health response: $API_HEALTH"
+            if echo "$API_HEALTH" | grep -q '"status"'; then
+              echo "✅ FastAPI backend healthy through nginx."
+            else
+              echo "⚠️ /api/health did not return expected payload."
+            fi
+
+            echo "================================================="
+            echo "STAGE 6: Login-Readiness Diagnostic (password salt)..."
+            echo "================================================="
+            # Reports how many users would currently fail login because their
+            # stored password does not decrypt with the deployed password_salt.
+            # This is informational — it does not fail the deploy.
+            sudo docker exec app-container /opt/venv/bin/python \
+              /opt/ceg/algo/api_manager/reset_password.py --check || true
 
             echo "Pruning unused images..."
             sudo docker image prune -f
