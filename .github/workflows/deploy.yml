@@ -30,7 +30,7 @@ jobs:
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
-          password: ${{ secrets.GH_PAT }}
+          password: ${{ secrets.GHCR_PAT }}
 
       - name: Docker Metadata
         id: meta
@@ -59,15 +59,15 @@ jobs:
       - name: Deploy
         uses: appleboy/ssh-action@v1.0.3
         with:
-          host: ${{ secrets.SERVER_HOST }}
-          username: ${{ secrets.SERVER_USER }}
-          password: ${{ secrets.SERVER_PASS }}
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          password: ${{ secrets.DEPLOY_PASSWORD }}
           port: 22
           script: |
             set -e
             IMAGE=$(echo "ghcr.io/${{ github.repository }}" | tr '[:upper:]' '[:lower:]')
 
-            echo "${{ secrets.GH_PAT }}" | sudo docker login ghcr.io \
+            echo "${{ secrets.GHCR_PAT }}" | sudo docker login ghcr.io \
               -u "${{ github.actor }}" \
               --password-stdin
 
