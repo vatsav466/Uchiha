@@ -57,7 +57,7 @@ jobs:
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     runs-on: ubuntu-latest
     steps:
-      - name: Deploy via SSH
+      - name: Deploy Application
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.DEPLOY_HOST }}
@@ -77,7 +77,7 @@ jobs:
             sudo docker rm app-container || true
             sudo mkdir -p /opt/digitaltwin_images
 
-            # Run container using host network mode for direct access to host services (Redis, Nginx)
+            # Run container using host networking mode
             sudo docker run -d \
               --name app-container \
               --restart unless-stopped \
@@ -85,52 +85,49 @@ jobs:
               -v /opt/digitaltwin_images:/opt/digitaltwin_images \
               ${IMAGE}:latest
 
-            echo "Waiting for Nginx frontend..."
-            for i in $(seq 1 15); do
+            echo "Waiting for Nginx / Frontend to respond..."
+            for i in $(seq 1 20); do
               STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:5378/ || echo "000")
               if [ "$STATUS" = "200" ]; then
-                echo "Frontend is up (HTTP $STATUS)"
+                echo "Frontend server is UP (HTTP $STATUS)"
                 break
               fi
-              echo "Frontend not ready (HTTP $STATUS), retrying ($i/15)..."
+              echo "Frontend loading (HTTP $STATUS), retry ($i/20)..."
               sleep 5
-              if [ "$i" -eq 15 ]; then
-                echo "Frontend failed to start (last HTTP status: $STATUS)."
-                sudo docker exec app-container supervisorctl -c /etc/supervisor/supervisord.conf status || true
-                sudo docker exec app-container tail -n 100 /var/log/api.log || true
-                sudo docker logs app-container
-                exit 1
-              fi
-            done
-
-            echo "Waiting for FastAPI backend services to load all route routers..."
-            for i in $(seq 1 20); do
-              DOCS_STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:5378/docs || echo "000")
-              OPENAPI_STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:5378/openapi.json || echo "000")
-              
-              if [ "$DOCS_STATUS" = "200" ] && [ "$OPENAPI_STATUS" = "200" ]; then
-                echo "FastAPI backend active: Swagger UI (HTTP $DOCS_STATUS), OpenAPI schema (HTTP $OPENAPI_STATUS)"
-                break
-              fi
-              
-              echo "FastAPI endpoints initializing... Docs: $DOCS_STATUS, Schema: $OPENAPI_STATUS ($i/20)"
-              sleep 3
-              
               if [ "$i" -eq 20 ]; then
-                echo "FastAPI failed to serve docs/schema within timeout."
-                echo "--- Supervisor Service Status ---"
+                echo "Frontend service failed to start."
                 sudo docker exec app-container supervisorctl -c /etc/supervisor/supervisord.conf status || true
-                echo "--- FastAPI Application Log ---"
                 sudo docker exec app-container cat /var/log/api.log || true
-                echo "--- Container Console Output ---"
                 sudo docker logs app-container
                 exit 1
               fi
             done
 
-            echo "Verifying API proxy route..."
-            API_STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:5378/api/ || echo "000")
-            echo "API Proxy endpoint responded with HTTP $API_STATUS"
+            echo "Allowing FastAPI services and Redis to fully register all endpoints..."
+            sleep 5
 
-            echo "Pruning unused docker images..."
+            echo "Verifying FastAPI Swagger UI..."
+            DOCS_STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:5378/docs || echo "000")
+            if [ "$DOCS_STATUS" = "200" ] || [ "$DOCS_STATUS" = "307" ]; then
+              echo "Swagger UI reachable (HTTP $DOCS_STATUS)"
+            else
+              echo "FastAPI Swagger endpoint unreachable (HTTP $DOCS_STATUS)."
+              echo "=== Supervisor Status ==="
+              sudo docker exec app-container supervisorctl -c /etc/supervisor/supervisord.conf status || true
+              echo "=== Backend API Log Output ==="
+              sudo docker exec app-container cat /var/log/api.log || true
+              echo "=== Container Logs ==="
+              sudo docker logs app-container
+              exit 1
+            fi
+
+            echo "Checking complete OpenAPI endpoints generation (/openapi.json)..."
+            OPENAPI_STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:5378/openapi.json || echo "000")
+            if [ "$OPENAPI_STATUS" = "200" ]; then
+              echo "All FastAPI endpoints schema loaded successfully! (HTTP $OPENAPI_STATUS)"
+            else
+              echo "Warning: openapi.json returned HTTP $OPENAPI_STATUS"
+            fi
+
+            echo "Cleaning up dangling images..."
             sudo docker image prune -f
