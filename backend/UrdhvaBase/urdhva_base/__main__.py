@@ -15,6 +15,9 @@ if __name__ == "__main__":
     log_level: str = None
     reload: bool = False
     port: int = int(os.environ.get("PORT", 9000))
+    # Bind on all interfaces by default so the API is reachable on the
+    # container/host IP (e.g. http://<server>:8002/docs). Override with HOST.
+    host: str = os.environ.get("HOST", "0.0.0.0")
     # print(os.getcwd(), sys.path)
     if args.config:
         print(urdhva_base.settings.json(indent=2))
@@ -24,4 +27,4 @@ if __name__ == "__main__":
         log_level = "debug"
         reload = True
 
-    uvicorn.run("urdhva_base.restapi:app", port=port, log_level=log_level, reload=reload, reload_dirs=[os.getcwd()])
+    uvicorn.run("urdhva_base.restapi:app", host=host, port=port, log_level=log_level, reload=reload, reload_dirs=[os.getcwd()])
