@@ -1,46 +1,39 @@
-
-db_urls={"postgres_async": ["postgresql+asyncpg://165.101.248.89:5432/hpcl_ceg?user=novex&password=UUDrftkiJLPM59jD"], "redis": ["redis://localhost:6379"]}
-import_paths={"base_path": "/opt/ceg/algo/", "api_path": "/opt/ceg/algo/api_manager","utilities": "/opt/ceg/algo/utilities", "vendor_ingest_path": "/opt/ceg/algo/vendor_ingestion_api", "ceg_role_api_path": "/opt/ceg/algo//ceg_role_master_api/", "ticketing": "/opt/ceg/algo/api_manager_ticketing"}
-smtp_host="smtp.gmail.com"
-smtp_port=587
-smtp_from_url="yesu.p@algofusiontech.com"
-smtp_username="yesu.p@algofusiontech.com"
-smtp_password="vazm ymuy ckod pvkt"
-smtp_tls_enabled=True
-smtp_ssl_enabled=False
-tas_faulty_camunda_url="http://localhost:8082"
-camunda_url="http://localhost:8082"
-things_board_url="http://localhost:8080"
-things_board_username="admin@algofusiontech.com"
-things_board_password="Alg0Sc@daDash#70"
+db_urls={"postgres_async": ["postgresql+asyncpg://localhost:5432/hpcl_ceg?user=novex&password=UUDrftkiJLPM59jD"], "redis": ["redis://localhost:6379"]}
+import_paths={"base_path": "/opt/ceg/algo/", "api_path": "/opt/ceg/algo/api_manager", "vendor_ingest_path": "/opt/ceg/algo/vendor_ingestion_api", "ceg_role_api_path": "/opt/ceg/algo//ceg_role_master_api/"}
+things_board_url="http://140.245.238.142:8080"
+things_board_username="tenant@thingsboard.org"
+things_board_password="Algo#@70"
 camunda_url_config={"camunda_dryout_01": {"host": "10.90.38.167", "port": 9080},"camunda_dryout_02": {"host": "10.90.38.167", "port": 9081},"camunda_dryout_03": {"host": "10.90.38.167", "port": 9082},"camunda_dryout_04": {"host": "10.90.38.167", "port": 9083},"camunda_dryout_05": {"host": "10.90.38.167", "port": 9084},"camunda_dryout_06": {"host": "10.90.38.167", "port": 9085},"camunda_dryout_07": {"host": "10.90.38.167", "port": 9086},"camunda_dryout_08": {"host": "10.90.38.167", "port": 9087},"camunda_dryout_09": {"host": "10.90.38.167", "port": 9088},"camunda_dryout_10": {"host": "10.90.38.167", "port": 9089}}
 db_connection_config={"ims": "3", "hpcl_ceg": "1", "cris": "2"}
 db_connection_mapping={"2": {"cred_model": "Databases", "cred_type": "PostgreSQL"},"3": {"cred_model": "Databases", "cred_type": "Oracle"},"1": {"cred_model": "Databases", "cred_type": "PostgreSQL"}}
+cache_gateway_host='10.90.38.161'
+camunda_configuration={"TAS": [{"alert_section": "TAS", "url": "http://10.90.38.167:9094", "sap_id": [], "zone": [], "sales_area": [], "region": [], "rule": "odd"}, {"alert_section": "TAS", "url": "http://10.90.38.167:9095", "sap_id": [], "zone": [], "sales_area": [], "region": [], "rule": "even"}, {"alert_section": "VA", "url": "http://10.90.38.167:9091", "sap_id": [], "zone": [], "sales_area": [], "region": [], "rule": ""},{"alert_section": "VTS", "url": "http://10.90.38.167:9092", "sap_id": [], "zone": [], "sales_area": [], "region": [], "rule": ""}], "RO": [{"alert_section": "VA", "url": "http://10.90.38.167:9090", "sap_id": [], "zone": [], "sales_area": [], "region": [], "rule": ""}], "LPG": [{"alert_section": "VA", "url": "http://10.90.38.167:9091", "sap_id": [], "zone": [], "sales_area": [], "region": [], "rule": ""},{"alert_section": "VTS", "url": "http://10.90.38.167:9093", "sap_id": [], "zone": [], "sales_area": [], "region": [], "rule": ""}]}
 encryption_key='mcMAmuM2wLgNey7hgaCXDsaH__h13R2esSQ7fKvX3ak='
 enable_encrypted_payload=True
-#disable_api_extra_inputs=False
-
-# ── Password encryption salt (CRITICAL for login) ─────────────────────────────
-# Passwords in the `users` table are stored as Fernet tokens derived via HKDF
-# from this salt. It MUST match the salt that was used when the passwords were
-# created. If this DB was migrated from an older deployment that used a
-# different salt, login fails with 401 "Invalid Login Credentials" for every
-# user. In that case either:
-#   1) set this to the ORIGINAL salt from the old deployment, or
-#   2) reset the passwords with the current salt:
-#        docker exec novex_dev /opt/venv/bin/python \
-#          /opt/ceg/algo/api_manager/reset_password.py admin '<NewPassword>'
-password_salt=urdhva_base_secret
-
-# ── LDAP / Active Directory (needed for is_ad_user=True accounts) ─────────────
-# Uncomment and set when AD users must log in with their corporate password.
-#ldap_host=your-ad-server-host
-#ldap_port=389
-#ldap_domain=your.domain.local
-minio_endpoint="http://localhost:9006"
-minio_access_key="minioadmin"
-minio_secret_key="minioadmin"
+#disable_api_extra_inputs=True
+minio_endpoint="http://140.245.238.142:9000"
+minio_access_key="admin"
+minio_secret_key="ceg_adm_pass1234"
 minio_bucket="reports"
 minio_secure=False
-
-server_ip = "localhost"
+enable_header_auth=True
+root@algocccdev1:/opt/ceg/algo/vendor_ingestion_api# cat .alg_env
+db_urls={"postgres_async": ["postgresql+asyncpg://localhost:5432/hpcl_ceg?user=novex&password=UUDrftkiJLPM59jD"], "redis": ["redis://localhost:6379"]}
+import_paths={"base_path": "/opt/ceg/algo/", "api_path": "/opt/ceg/algo/api_manager", "vendor_ingest_path": "/opt/ceg/algo/vendor_ingestion_api", "ceg_role_api_path": "/opt/ceg/algo//ceg_role_master_api/"}
+things_board_url="http://140.245.238.142:8080"
+things_board_username="tenant@thingsboard.org"
+things_board_password="Algo#@70"
+camunda_url_config={"camunda_dryout_01": {"host": "10.90.38.167", "port": 9080},"camunda_dryout_02": {"host": "10.90.38.167", "port": 9081},"camunda_dryout_03": {"host": "10.90.38.167", "port": 9082},"camunda_dryout_04": {"host": "10.90.38.167", "port": 9083},"camunda_dryout_05": {"host": "10.90.38.167", "port": 9084},"camunda_dryout_06": {"host": "10.90.38.167", "port": 9085},"camunda_dryout_07": {"host": "10.90.38.167", "port": 9086},"camunda_dryout_08": {"host": "10.90.38.167", "port": 9087},"camunda_dryout_09": {"host": "10.90.38.167", "port": 9088},"camunda_dryout_10": {"host": "10.90.38.167", "port": 9089}}
+db_connection_config={"ims": "3", "hpcl_ceg": "1", "cris": "2"}
+db_connection_mapping={"2": {"cred_model": "Databases", "cred_type": "PostgreSQL"},"3": {"cred_model": "Databases", "cred_type": "Oracle"},"1": {"cred_model": "Databases", "cred_type": "PostgreSQL"}}
+cache_gateway_host='10.90.38.161'
+camunda_configuration={"TAS": [{"alert_section": "TAS", "url": "http://10.90.38.167:9094", "sap_id": [], "zone": [], "sales_area": [], "region": [], "rule": "odd"}, {"alert_section": "TAS", "url": "http://10.90.38.167:9095", "sap_id": [], "zone": [], "sales_area": [], "region": [], "rule": "even"}, {"alert_section": "VA", "url": "http://10.90.38.167:9091", "sap_id": [], "zone": [], "sales_area": [], "region": [], "rule": ""},{"alert_section": "VTS", "url": "http://10.90.38.167:9092", "sap_id": [], "zone": [], "sales_area": [], "region": [], "rule": ""}], "RO": [{"alert_section": "VA", "url": "http://10.90.38.167:9090", "sap_id": [], "zone": [], "sales_area": [], "region": [], "rule": ""}], "LPG": [{"alert_section": "VA", "url": "http://10.90.38.167:9091", "sap_id": [], "zone": [], "sales_area": [], "region": [], "rule": ""},{"alert_section": "VTS", "url": "http://10.90.38.167:9093", "sap_id": [], "zone": [], "sales_area": [], "region": [], "rule": ""}]}
+encryption_key='mcMAmuM2wLgNey7hgaCXDsaH__h13R2esSQ7fKvX3ak='
+#enable_encrypted_payload=True
+#disable_api_extra_inputs=True
+minio_endpoint="http://140.245.238.142:9000"
+minio_access_key="admin"
+minio_secret_key="ceg_adm_pass1234"
+minio_bucket="reports"
+minio_secure=False
+enable_header_auth=True
