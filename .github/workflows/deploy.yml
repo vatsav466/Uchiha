@@ -77,17 +77,16 @@ jobs:
             IMAGE=$(echo "ghcr.io/${{ github.repository }}" | tr '[:upper:]' '[:lower:]')
             echo "==> Image: ${IMAGE}:latest"
 
-            # Pull latest image
+            # ── Pull latest image ─────────────────────────────────────────────
             echo "${{ secrets.GHCR_PAT }}" | sudo docker login ghcr.io \
               -u "${{ github.actor }}" --password-stdin
             sudo docker pull ${IMAGE}:latest
 
-            # Stop and remove old container
+            # ── Replace the running container ─────────────────────────────────
             sudo docker stop app-container 2>/dev/null || true
             sudo docker rm   app-container 2>/dev/null || true
             sudo mkdir -p /opt/digitaltwin_images
 
-            # Start new container
             sudo docker run -d \
               --name app-container \
               --restart unless-stopped \
@@ -95,53 +94,77 @@ jobs:
               -v /opt/digitaltwin_images:/opt/digitaltwin_images \
               ${IMAGE}:latest
 
-            # ── Wait for nginx + api to become ready (max 180s) ──────────────
-            # supervisord starts: redis(10s) → api(15s startsecs) → nginx(5s)
-            # Total cold-start can take ~40s; 180s gives plenty of headroom.
-            echo "==> Waiting for http://165.101.248.89:5378/ ..."
+            # ── Stage 1: wait for nginx / frontend (max 180s) ─────────────────
+            # nginx binds quickly, so the static frontend appears in seconds.
+            echo "==> Waiting for frontend on :5378 ..."
             for i in $(seq 1 36); do
               STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:5378/health || echo "000")
               if [ "$STATUS" = "200" ]; then
-                echo "✅ Frontend is live at http://165.101.248.89:5378/ (HTTP $STATUS)"
+                echo "✅ Frontend live — http://165.101.248.89:5378/ (HTTP $STATUS)"
                 break
               fi
               echo "   attempt $i/36 — HTTP $STATUS"
               sleep 5
               if [ "$i" -eq 36 ]; then
                 echo "❌ Frontend did not start within 180s — dumping logs"
-                sudo docker exec app-container supervisorctl status || true
+                sudo docker exec app-container supervisorctl -c /etc/supervisor/conf.d/novex.conf status || true
                 sudo docker exec app-container tail -n 100 /var/log/api.log || true
                 sudo docker logs --tail 100 app-container
                 exit 1
               fi
             done
 
-            # ── Verify backend is up: /api/health ────────────────────────────
-            API=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:5378/api/health || echo "000")
-            [ "$API" = "200" ] \
-              && echo "✅ Backend API — http://165.101.248.89:5378/api/health (HTTP $API)" \
-              || echo "⚠️  /api/health returned HTTP $API"
+            # ── Stage 2: wait for FastAPI to become truly ready (max 300s) ────
+            # The API loads ~570 routers and warms Redis + DB on startup, which
+            # routinely takes 30–120s. nginx returns 502 until uvicorn has bound
+            # :8002, so we poll BOTH the nginx proxy and the direct port until
+            # they return 200 — then (and only then) report the deploy healthy.
+            echo "==> Waiting for FastAPI backend on :8002 ..."
+            BACKEND_OK="no"
+            for i in $(seq 1 60); do
+              API=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:5378/api/health || echo "000")
+              DIRECT=$(curl -s -o /dev/null -w "%{http_code}" -L http://127.0.0.1:8002/docs || echo "000")
+              if [ "$API" = "200" ] && [ "$DIRECT" = "200" ]; then
+                echo "✅ FastAPI ready — /api/health HTTP $API, :8002/docs HTTP $DIRECT"
+                BACKEND_OK="yes"
+                break
+              fi
+              echo "   attempt $i/60 — /api/health=$API  :8002/docs=$DIRECT (backend warming up)"
+              sleep 5
+            done
 
-            # ── Verify Swagger UI at http://165.101.248.89:5378/docs ─────────
+            if [ "$BACKEND_OK" != "yes" ]; then
+              echo "❌ FastAPI backend never became ready within 300s"
+              echo "--- supervisor status ---"
+              sudo docker exec app-container supervisorctl -c /etc/supervisor/conf.d/novex.conf status || true
+              echo "--- api.log tail ---"
+              sudo docker exec app-container tail -n 200 /var/log/api.log || true
+              echo "--- full container logs ---"
+              sudo docker logs --tail 200 app-container
+              exit 1
+            fi
+
+            # ── Stage 3: verify the remaining routes ──────────────────────────
             DOCS=$(curl -s -o /dev/null -w "%{http_code}" -L http://127.0.0.1:5378/docs || echo "000")
-            [ "$DOCS" = "200" ] \
-              && echo "✅ Swagger UI — http://165.101.248.89:5378/docs (HTTP $DOCS)" \
-              || echo "⚠️  /docs returned HTTP $DOCS"
+            if [ "$DOCS" = "200" ]; then
+              echo "✅ Swagger UI — http://165.101.248.89:5378/docs (HTTP $DOCS)"
+            else
+              echo "❌ /docs returned HTTP $DOCS"
+              sudo docker exec app-container tail -n 200 /var/log/api.log || true
+              exit 1
+            fi
 
-            # ── Verify FastAPI direct at http://165.101.248.89:8002/docs ─────
-            DIRECT=$(curl -s -o /dev/null -w "%{http_code}" -L http://127.0.0.1:8002/docs || echo "000")
-            [ "$DIRECT" = "200" ] \
-              && echo "✅ FastAPI direct — http://165.101.248.89:8002/docs (HTTP $DIRECT)" \
-              || echo "⚠️  :8002/docs returned HTTP $DIRECT"
-
-            # ── Verify OpenAPI schema ─────────────────────────────────────────
             OAS=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:5378/openapi.json || echo "000")
-            [ "$OAS" = "200" ] \
-              && echo "✅ OpenAPI schema — http://165.101.248.89:5378/openapi.json (HTTP $OAS)" \
-              || echo "⚠️  /openapi.json returned HTTP $OAS"
+            if [ "$OAS" = "200" ]; then
+              echo "✅ OpenAPI schema — http://165.101.248.89:5378/openapi.json (HTTP $OAS)"
+            else
+              echo "❌ /openapi.json returned HTTP $OAS"
+              sudo docker exec app-container tail -n 200 /var/log/api.log || true
+              exit 1
+            fi
 
             # ── Done ──────────────────────────────────────────────────────────
             echo ""
-            echo "✅ Deployment complete — http://165.101.248.89:5378/"
-            sudo docker exec app-container supervisorctl status || true
+            echo "✅ Deployment complete — http://165.101.248.89:5378/ and http://165.101.248.89:8002/docs"
+            sudo docker exec app-container supervisorctl -c /etc/supervisor/conf.d/novex.conf status || true
             sudo docker image prune -f

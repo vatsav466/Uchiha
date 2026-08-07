@@ -1,0 +1,29 @@
+# ── Git ──────────────────────────────────────────────────────────────────────
+.git
+.gitignore
+.worktrees/
+
+# ── Node / frontend build artifacts ───────────────────────────────────────────
+node_modules
+frontend/node_modules
+frontend/dist
+frontend/.vite
+*.tsbuildinfo
+
+# ── Python ────────────────────────────────────────────────────────────────────
+__pycache__
+*.py[cod]
+.venv
+venv
+*.egg-info
+.eggs
+
+# ── Docker ────────────────────────────────────────────────────────────────────
+docker-compose.override.yml
+
+# ── Logs / OS / editor ────────────────────────────────────────────────────────
+*.log
+logs/
+.DS_Store
+.idea/
+.vscode/
