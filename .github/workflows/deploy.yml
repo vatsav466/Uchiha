@@ -45,7 +45,6 @@ jobs:
           tags: |
             type=raw,value=latest
             type=sha,format=short
-
       - name: Build and push Docker image
         uses: docker/build-push-action@v6
         with:
@@ -71,48 +70,35 @@ jobs:
           password: ${{ secrets.DEPLOY_PASSWORD }}
           port: 22
           command_timeout: 15m
+          # IMPORTANT: store the *contents* of your .alg_env file as a GitHub
+          # secret called ALG_ENV_CONTENT (Settings → Secrets → Actions).
+          # That's what actually fixes the "password authentication failed
+          # for user root" error — your DB creds were never reaching the
+          # container before because nothing mounted the env file.
+          envs: ALG_ENV_CONTENT
           script: |
             set -e
-
             IMAGE=$(echo "ghcr.io/${{ github.repository }}" | tr '[:upper:]' '[:lower:]')
             echo "==> Image: ${IMAGE}:latest"
-
-            # ── The .alg_env FILE must already exist on the host at this exact
-            # absolute path (it is never checked into the repo/image — it holds
-            # DB creds/secrets). Adjust this path to wherever it actually lives
-            # on algocccdev1, e.g. /home/cccdev1/backend/api_manager/.alg_env
-            ENV_FILE_HOST_PATH="/home/cccdev1/backend/api_manager/.alg_env"
-            ENV_FILE_CONTAINER_PATH="/opt/ceg/algo/api_manager/.alg_env"
-
-            # ── Fail fast and loud if the env file is missing, instead of
-            # letting Docker silently create it as a directory (which caused
-            # the "not a directory" mount error and the downstream Postgres
-            # "password authentication failed" error).
-            if [ ! -f "$ENV_FILE_HOST_PATH" ]; then
-              echo "❌ ENV file not found at $ENV_FILE_HOST_PATH on the deploy host."
-              echo "   Docker will silently create it as a directory and the app will"
-              echo "   start with no DB credentials. Aborting deploy instead."
-              exit 1
-            fi
-
+            # ── Write the real env/credentials file on the host ────────────────
+            sudo mkdir -p /opt/ceg/algo/api_manager
+            echo "${ALG_ENV_CONTENT}" | sudo tee /opt/ceg/algo/api_manager/.alg_env > /dev/null
+            sudo chmod 600 /opt/ceg/algo/api_manager/.alg_env
             # ── Pull latest image ─────────────────────────────────────────────
             echo "${{ secrets.GHCR_PAT }}" | sudo docker login ghcr.io \
               -u "${{ github.actor }}" --password-stdin
             sudo docker pull ${IMAGE}:latest
-
             # ── Replace the running container ─────────────────────────────────
             sudo docker stop app-container 2>/dev/null || true
             sudo docker rm   app-container 2>/dev/null || true
             sudo mkdir -p /opt/digitaltwin_images
-
             sudo docker run -d \
               --name app-container \
               --restart unless-stopped \
               --network host \
               -v /opt/digitaltwin_images:/opt/digitaltwin_images \
-              -v "${ENV_FILE_HOST_PATH}:${ENV_FILE_CONTAINER_PATH}:ro" \
+              -v /opt/ceg/algo/api_manager/.alg_env:/opt/ceg/algo/api_manager/.alg_env:ro \
               ${IMAGE}:latest
-
             # ── Stage 1: wait for nginx / frontend (max 180s) ─────────────────
             echo "==> Waiting for frontend on :5378 ..."
             for i in $(seq 1 36); do
@@ -131,7 +117,6 @@ jobs:
                 exit 1
               fi
             done
-
             # ── Stage 2: wait for FastAPI to become truly ready (max 300s) ────
             echo "==> Waiting for FastAPI backend on :8002 ..."
             BACKEND_OK="no"
@@ -146,7 +131,6 @@ jobs:
               echo "   attempt $i/60 — /api/health=$API  :8002/docs=$DIRECT (backend warming up)"
               sleep 5
             done
-
             if [ "$BACKEND_OK" != "yes" ]; then
               echo "❌ FastAPI backend never became ready within 300s"
               echo "--- supervisor status ---"
@@ -157,15 +141,25 @@ jobs:
               sudo docker logs --tail 200 app-container
               exit 1
             fi
-
-            # ── Stage 3: sanity check a real route (adjust as needed) ─────────
+            # ── Stage 3: verify the remaining routes ──────────────────────────
             DOCS=$(curl -s -o /dev/null -w "%{http_code}" -L http://127.0.0.1:5378/docs || echo "000")
-            echo "==> /docs check: HTTP $DOCS"
-
-            # ── Quick DB connectivity smoke check via the running container ───
-            echo "==> Verifying DB auth is not falling back to defaults..."
-            sudo docker exec app-container tail -n 20 /var/log/api.log | grep -i "InvalidPasswordError" \
-              && { echo "❌ DB auth still failing — check contents of $ENV_FILE_HOST_PATH"; exit 1; } \
-              || echo "✅ No recent DB auth errors."
-
-            echo "==> Deploy complete."
+            if [ "$DOCS" = "200" ]; then
+              echo "✅ Swagger UI — http://165.101.248.89:5378/docs (HTTP $DOCS)"
+            else
+              echo "❌ /docs returned HTTP $DOCS"
+              sudo docker exec app-container tail -n 200 /var/log/api.log || true
+              exit 1
+            fi
+            OAS=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:5378/openapi.json || echo "000")
+            if [ "$OAS" = "200" ]; then
+              echo "✅ OpenAPI schema — http://165.101.248.89:5378/openapi.json (HTTP $OAS)"
+            else
+              echo "❌ /openapi.json returned HTTP $OAS"
+              sudo docker exec app-container tail -n 200 /var/log/api.log || true
+              exit 1
+            fi
+            # ── Done ──────────────────────────────────────────────────────────
+            echo ""
+            echo "✅ Deployment complete — http://165.101.248.89:5378/ and http://165.101.248.89:8002/docs"
+            sudo docker exec app-container supervisorctl -c /etc/supervisor/conf.d/novex.conf status || true
+            sudo docker image prune -f
