@@ -33,6 +33,8 @@ export const config = {
     doubleEncode: false // Set to true if backend expects double base64 encoding
   },
   api: {
+    // Empty string = same-origin requests. Nginx on :5378 proxies /api/* → FastAPI on :8002.
+    // Do NOT set this to a hardcoded host:port — it breaks when deployed.
     baseUrl: ""
   }
 };

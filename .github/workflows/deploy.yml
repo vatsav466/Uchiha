@@ -70,7 +70,7 @@ jobs:
           username: ${{ secrets.DEPLOY_USER }}
           password: ${{ secrets.DEPLOY_PASSWORD }}
           port: 22
-          command_timeout: 10m
+          command_timeout: 15m
           script: |
             set -e
 
@@ -95,24 +95,32 @@ jobs:
               -v /opt/digitaltwin_images:/opt/digitaltwin_images \
               ${IMAGE}:latest
 
-            # ── Wait for nginx to become ready (max 120s) ────────────────────
+            # ── Wait for nginx + api to become ready (max 180s) ──────────────
+            # supervisord starts: redis(10s) → api(15s startsecs) → nginx(5s)
+            # Total cold-start can take ~40s; 180s gives plenty of headroom.
             echo "==> Waiting for http://165.101.248.89:5378/ ..."
-            for i in $(seq 1 24); do
+            for i in $(seq 1 36); do
               STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:5378/health || echo "000")
               if [ "$STATUS" = "200" ]; then
                 echo "✅ Frontend is live at http://165.101.248.89:5378/ (HTTP $STATUS)"
                 break
               fi
-              echo "   attempt $i/24 — HTTP $STATUS"
+              echo "   attempt $i/36 — HTTP $STATUS"
               sleep 5
-              if [ "$i" -eq 24 ]; then
-                echo "❌ Frontend did not start within 120s"
+              if [ "$i" -eq 36 ]; then
+                echo "❌ Frontend did not start within 180s — dumping logs"
                 sudo docker exec app-container supervisorctl status || true
                 sudo docker exec app-container tail -n 100 /var/log/api.log || true
                 sudo docker logs --tail 100 app-container
                 exit 1
               fi
             done
+
+            # ── Verify backend is up: /api/health ────────────────────────────
+            API=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:5378/api/health || echo "000")
+            [ "$API" = "200" ] \
+              && echo "✅ Backend API — http://165.101.248.89:5378/api/health (HTTP $API)" \
+              || echo "⚠️  /api/health returned HTTP $API"
 
             # ── Verify Swagger UI at http://165.101.248.89:5378/docs ─────────
             DOCS=$(curl -s -o /dev/null -w "%{http_code}" -L http://127.0.0.1:5378/docs || echo "000")
