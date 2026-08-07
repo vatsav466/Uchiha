@@ -50,6 +50,12 @@ app = FastAPI(
     docs_url="/docs",
     redoc_url="/redoc",
     openapi_url="/openapi.json",
+    # Present API tags (group names) and operations alphabetically so the
+    # docs are readable instead of showing router-registration order.
+    swagger_ui_parameters={
+        "tagsSorter": "alpha",
+        "operationsSorter": "alpha",
+    },
 )
 
 app.state.limiter = limiter
