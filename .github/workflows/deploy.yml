@@ -71,6 +71,7 @@ jobs:
           password: ${{ secrets.DEPLOY_PASSWORD }}
           port: 22
           command_timeout: 15m
+          envs: ALG_ENV_CONTENTS
           script: |
             set -e
 
@@ -82,6 +83,21 @@ jobs:
               -u "${{ github.actor }}" --password-stdin
             sudo docker pull ${IMAGE}:latest
 
+            # ── Prepare required config directories/files BEFORE docker run ───
+            # This is the actual fix: if the host path for .alg_env does not
+            # exist as a real FILE before `docker run -v ...` executes, Docker
+            # auto-creates it as a DIRECTORY, and the bind mount fails with
+            # "not a directory". We write the real file here first.
+            sudo mkdir -p /opt/app-config
+            echo "${{ secrets.ALG_ENV_CONTENTS }}" | sudo tee /opt/app-config/.alg_env > /dev/null
+            sudo chmod 600 /opt/app-config/.alg_env
+
+            if [ ! -f /opt/app-config/.alg_env ]; then
+              echo "❌ Failed to create /opt/app-config/.alg_env — aborting before container start"
+              exit 1
+            fi
+            echo "✅ .alg_env file present at /opt/app-config/.alg_env ($(wc -l < /opt/app-config/.alg_env) lines)"
+
             # ── Replace the running container ─────────────────────────────────
             sudo docker stop app-container 2>/dev/null || true
             sudo docker rm   app-container 2>/dev/null || true
@@ -92,10 +108,10 @@ jobs:
               --restart unless-stopped \
               --network host \
               -v /opt/digitaltwin_images:/opt/digitaltwin_images \
+              -v /opt/app-config/.alg_env:/opt/ceg/algo/api_manager/.alg_env:ro \
               ${IMAGE}:latest
 
             # ── Stage 1: wait for nginx / frontend (max 180s) ─────────────────
-            # nginx binds quickly, so the static frontend appears in seconds.
             echo "==> Waiting for frontend on :5378 ..."
             for i in $(seq 1 36); do
               STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:5378/health || echo "000")
@@ -115,10 +131,6 @@ jobs:
             done
 
             # ── Stage 2: wait for FastAPI to become truly ready (max 300s) ────
-            # The API loads ~570 routers and warms Redis + DB on startup, which
-            # routinely takes 30–120s. nginx returns 502 until uvicorn has bound
-            # :8002, so we poll BOTH the nginx proxy and the direct port until
-            # they return 200 — then (and only then) report the deploy healthy.
             echo "==> Waiting for FastAPI backend on :8002 ..."
             BACKEND_OK="no"
             for i in $(seq 1 60); do
@@ -144,7 +156,21 @@ jobs:
               exit 1
             fi
 
-            # ── Stage 3: verify the remaining routes ──────────────────────────
+            # ── Stage 3: verify /api/session/me actually returns real data ────
+            # This is the endpoint whose incomplete response was crashing the
+            # frontend (hasButtonAccess reading .length of undefined). If the
+            # env file wasn't loaded, this will come back empty/malformed.
+            ME_RESPONSE=$(curl -s http://127.0.0.1:5378/api/session/me || echo "")
+            if [ -z "$ME_RESPONSE" ] || [ "$ME_RESPONSE" = "{}" ]; then
+              echo "❌ /api/session/me returned an empty/suspicious payload: $ME_RESPONSE"
+              echo "   This is almost certainly why the frontend renders a blank screen."
+              sudo docker exec app-container tail -n 200 /var/log/api.log || true
+              exit 1
+            else
+              echo "✅ /api/session/me returned data"
+            fi
+
+            # ── Stage 4: verify the remaining routes ──────────────────────────
             DOCS=$(curl -s -o /dev/null -w "%{http_code}" -L http://127.0.0.1:5378/docs || echo "000")
             if [ "$DOCS" = "200" ]; then
               echo "✅ Swagger UI — http://165.101.248.89:5378/docs (HTTP $DOCS)"
