@@ -1,5 +1,9 @@
 import { apiClient } from '@/services/apiClient';
-import axios from 'axios';
+
+// All paths are relative — nginx on :5378 proxies /api/* → FastAPI on :8002.
+// Never use a hardcoded host:port here; it breaks in every environment except
+// the machine it was hardcoded for.
+const BASE = '/api';
 
 export interface LocationMasterResponse {
   data: {
@@ -40,8 +44,6 @@ export interface PaginatedResponse<T> {
   total: number;
 }
 
-const BASE_URL = 'https://algo-ceg-dev.algofusiontech.com/api';
-
 export const LocationMasterService = {
   async getAllLocations(params: {
     q?: string;
@@ -52,13 +54,16 @@ export const LocationMasterService = {
     view?: string;
   }): Promise<PaginatedResponse<LocationData>> {
     try {
-      const response = await apiClient.get<LocationMasterResponse>(`${BASE_URL}/locationmaster`, {
-        params: {
-          ...params,
-          limit: params.limit || 10,
-          skip: params.skip || 0
-        },
-      });
+      const response = await apiClient.get<LocationMasterResponse>(
+        `${BASE}/locationmaster`,
+        {
+          params: {
+            ...params,
+            limit: params.limit || 10,
+            skip: params.skip || 0,
+          },
+        }
+      );
 
       const mappedData = response.data.data.map((item) => ({
         id: item.id.toString(),
@@ -71,12 +76,12 @@ export const LocationMasterService = {
         region: item.region,
         territory: item.district,
         latLong: `${item.latitude},${item.longitude}`,
-        status: item.is_active ? 'active' : 'inactive'
+        status: item.is_active ? 'active' : 'inactive',
       }));
 
       return {
         data: mappedData,
-        total: response.data.total || 0
+        total: response.data.total || 0,
       };
     } catch (error) {
       console.error('Error fetching locations:', error);
@@ -86,7 +91,7 @@ export const LocationMasterService = {
 
   async createLocation(locationData: Partial<LocationData>) {
     try {
-      const response = await apiClient.post(`${BASE_URL}/locationmaster`, locationData);
+      const response = await apiClient.post(`${BASE}/locationmaster`, locationData);
       return response.data;
     } catch (error) {
       console.error('Error creating location:', error);
@@ -96,7 +101,7 @@ export const LocationMasterService = {
 
   async updateLocation(id: string, locationData: Partial<LocationData>) {
     try {
-      const response = await apiClient.put(`${BASE_URL}/locationmaster/${id}`, locationData);
+      const response = await apiClient.put(`${BASE}/locationmaster/${id}`, locationData);
       return response.data;
     } catch (error) {
       console.error('Error updating location:', error);
@@ -106,7 +111,7 @@ export const LocationMasterService = {
 
   async deleteLocation(id: string) {
     try {
-      const response = await apiClient.delete(`${BASE_URL}/locationmaster/${id}`);
+      const response = await apiClient.delete(`${BASE}/locationmaster/${id}`);
       return response.data;
     } catch (error) {
       console.error('Error deleting location:', error);
@@ -117,23 +122,23 @@ export const LocationMasterService = {
   async uploadCsv(formData: FormData) {
     try {
       const response = await apiClient.post(
-        `${BASE_URL}/locationmaster/upload_location_master`,
+        `${BASE}/locationmaster/upload_location_master`,
         formData,
         {
           headers: {
             'Content-Type': 'multipart/form-data',
-            'accept': 'application/json'
-          }
+            accept: 'application/json',
+          },
         }
       );
-      
+
       if (Array.isArray(response.data) && response.data.length === 2) {
         return {
           success: response.data[0],
-          message: response.data[1]
+          message: response.data[1],
         };
       }
-      
+
       throw new Error('Unexpected response format');
     } catch (error) {
       console.error('Error uploading CSV:', error);
@@ -143,13 +148,17 @@ export const LocationMasterService = {
 
   async downloadTemplate() {
     try {
-      const response = await apiClient.post(`http://localhost:5200/api/locationmaster/download_template`, {}, {
-        responseType: 'blob',
-        headers: {
-          'accept': 'application/json',
-          'Content-Type': 'application/json'
+      const response = await apiClient.post(
+        `${BASE}/locationmaster/download_template`,
+        {},
+        {
+          responseType: 'blob',
+          headers: {
+            accept: 'application/json',
+            'Content-Type': 'application/json',
+          },
         }
-      });
+      );
       return response.data;
     } catch (error) {
       console.error('Error downloading template:', error);
@@ -163,29 +172,30 @@ export const LocationMasterService = {
         status: boolean;
         message: string;
         data: string;
-      }>(`http://localhost:5200/api/locationmaster/download_location_master`, {});
+      }>(`${BASE}/locationmaster/download_location_master`, {});
 
       if (!response.data.status || !response.data.data) {
         throw new Error('Failed to get download path');
       }
 
-      // Get the file content using the path
-      const fileResponse = await apiClient.get(`http://localhost:5200${response.data.data}`, {
+      // The backend returns a relative path (e.g. /downloads/file.csv).
+      // Fetch it via the same origin — nginx serves /downloads/* from the
+      // container's filesystem via FastAPI's static mount.
+      const fileResponse = await apiClient.get(response.data.data, {
         responseType: 'arraybuffer',
         headers: {
           'Content-Type': 'application/octet-stream',
-        }
+        },
       });
 
       return {
         data: fileResponse.data,
         success: true,
-        message: 'File fetched successfully'
+        message: 'File fetched successfully',
       };
-
     } catch (error) {
       console.error('Error downloading CSV:', error);
       throw error;
     }
-  }
+  },
 };

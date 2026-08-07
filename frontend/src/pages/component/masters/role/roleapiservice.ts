@@ -1,6 +1,8 @@
 // roleapiservice.ts
 import { apiClient } from '@/services/apiClient';
-import axios from 'axios';
+
+// All paths are relative — nginx on :5378 proxies /api/* → FastAPI on :8002.
+const BASE = '/api';
 
 export interface RoleMasterResponse {
   data: {
@@ -45,8 +47,6 @@ export interface PaginatedResponse<T> {
   total: number;
 }
 
-const BASE_URL = 'https://algo-ceg-dev.algofusiontech.com/api';
-
 export const RoleMasterService = {
   async getAllRoles(params?: {
     q?: string;
@@ -57,13 +57,16 @@ export const RoleMasterService = {
     view?: string;
   }): Promise<PaginatedResponse<RoleData>> {
     try {
-      const response = await apiClient.get<RoleMasterResponse>(`${BASE_URL}/rolemaster`, {
-        params: {
-          ...params,
-          limit: params?.limit || 10,
-          skip: params?.skip || 0
-        },
-      });
+      const response = await apiClient.get<RoleMasterResponse>(
+        `${BASE}/rolemaster`,
+        {
+          params: {
+            ...params,
+            limit: params?.limit || 10,
+            skip: params?.skip || 0,
+          },
+        }
+      );
 
       const mappedData = response.data.data.map((item) => ({
         id: item.id.toString(),
@@ -77,12 +80,12 @@ export const RoleMasterService = {
         city: item.city,
         territory: item.district,
         siteName: item.location_name,
-        escalationLevel: item.escalation_level
+        escalationLevel: item.escalation_level,
       }));
 
       return {
         data: mappedData,
-        total: response.data.total
+        total: response.data.total,
       };
     } catch (error) {
       console.error('Error fetching roles:', error);
@@ -92,7 +95,7 @@ export const RoleMasterService = {
 
   async createRole(roleData: Partial<RoleData>) {
     try {
-      const response = await apiClient.post(`${BASE_URL}/rolemaster`, roleData);
+      const response = await apiClient.post(`${BASE}/rolemaster`, roleData);
       return response.data;
     } catch (error) {
       console.error('Error creating role:', error);
@@ -102,7 +105,7 @@ export const RoleMasterService = {
 
   async updateRole(id: string, roleData: Partial<RoleData>) {
     try {
-      const response = await apiClient.put(`${BASE_URL}/rolemaster/${id}`, roleData);
+      const response = await apiClient.put(`${BASE}/rolemaster/${id}`, roleData);
       return response.data;
     } catch (error) {
       console.error('Error updating role:', error);
@@ -112,7 +115,7 @@ export const RoleMasterService = {
 
   async deleteRole(id: string) {
     try {
-      const response = await apiClient.delete(`${BASE_URL}/rolemaster/${id}`);
+      const response = await apiClient.delete(`${BASE}/rolemaster/${id}`);
       return response.data;
     } catch (error) {
       console.error('Error deleting role:', error);
@@ -123,23 +126,23 @@ export const RoleMasterService = {
   async uploadCsv(formData: FormData) {
     try {
       const response = await apiClient.post(
-        `${BASE_URL}/rolemaster/upload_role_master`,
+        `${BASE}/rolemaster/upload_role_master`,
         formData,
         {
           headers: {
             'Content-Type': 'multipart/form-data',
-            'accept': 'application/json'
-          }
+            accept: 'application/json',
+          },
         }
       );
-      
+
       if (Array.isArray(response.data) && response.data.length === 2) {
         return {
           success: response.data[0],
-          message: response.data[1]
+          message: response.data[1],
         };
       }
-      
+
       throw new Error('Unexpected response format');
     } catch (error) {
       console.error('Error uploading CSV:', error);
@@ -150,14 +153,14 @@ export const RoleMasterService = {
   async downloadTemplate() {
     try {
       const response = await apiClient.post(
-        `${BASE_URL}/rolemaster/download_template`, 
-        {}, 
+        `${BASE}/rolemaster/download_template`,
+        {},
         {
           responseType: 'blob',
           headers: {
-            'accept': 'application/json',
-            'Content-Type': 'application/json'
-          }
+            accept: 'application/json',
+            'Content-Type': 'application/json',
+          },
         }
       );
       return response.data;
@@ -173,28 +176,28 @@ export const RoleMasterService = {
         status: boolean;
         message: string;
         data: string;
-      }>(`${BASE_URL}/rolemaster/download_role_master`, {});
+      }>(`${BASE}/rolemaster/download_role_master`, {});
 
       if (!response.data.status || !response.data.data) {
         throw new Error('Failed to get download path');
       }
 
-      const fileResponse = await apiClient.get(`${BASE_URL}${response.data.data}`, {
+      // Backend returns a relative path (e.g. /downloads/file.csv)
+      const fileResponse = await apiClient.get(response.data.data, {
         responseType: 'arraybuffer',
         headers: {
           'Content-Type': 'application/octet-stream',
-        }
+        },
       });
 
       return {
         data: fileResponse.data,
         success: true,
-        message: 'File fetched successfully'
+        message: 'File fetched successfully',
       };
-
     } catch (error) {
       console.error('Error downloading CSV:', error);
       throw error;
     }
-  }
+  },
 };
