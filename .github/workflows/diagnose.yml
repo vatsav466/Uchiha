@@ -1,0 +1,41 @@
+name: Diagnose DB config on server
+
+on:
+  workflow_dispatch:
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Diagnose running container
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          password: ${{ secrets.DEPLOY_PASSWORD }}
+          port: 22
+          command_timeout: 5m
+          script: |
+            echo "=== running containers ==="
+            sudo docker ps --format '{{.Names}} {{.Image}} {{.Status}}'
+
+            echo "=== .alg_env db_urls in running container ==="
+            sudo docker exec app-container cat /opt/ceg/algo/api_manager/.alg_env 2>/dev/null | grep -iE 'db_urls|db_url' || echo "NO .alg_env OR NO db_urls LINE"
+
+            echo "=== ALG env vars set for api process ==="
+            sudo docker exec app-container bash -c "tr '\0' '\n' < /proc/1/environ 2>/dev/null | grep -i alg" || true
+
+            echo "=== resolved settings from inside container (CWD as supervisord starts it) ==="
+            sudo docker exec app-container bash -c "cd /opt/ceg/algo/api_manager && /opt/venv/bin/python -c \"import urdhva_base.settings as s; u=s.settings.db_urls['postgres_async'][0]; print('RESOLVED_URL:', u)\"" 2>&1 || echo "RESOLVE FAILED"
+
+            echo "=== is postgres reachable on localhost:5432 (the default fallback host)? ==="
+            sudo docker exec app-container bash -c "command -v pg_isready >/dev/null 2>&1 && pg_isready -h localhost -p 5432 || bash -c 'exec 3<>/dev/tcp/localhost/5432 && echo LOCALHOST:5432 OPEN || echo LOCALHOST:5432 CLOSED'" 2>&1 || true
+
+            echo "=== is postgres reachable on 165.101.248.89:5432 ? ==="
+            sudo docker exec app-container bash -c "exec 3<>/dev/tcp/165.101.248.89/5432 && echo 165.101.248.89:5432 OPEN || echo 165.101.248.89:5432 CLOSED" 2>&1 || echo "165.101.248.89:5432 CLOSED"
+
+            echo "=== try connecting as novex from container ==="
+            sudo docker exec app-container bash -c "cd /opt/ceg/algo/api_manager && /opt/venv/bin/python -c \"import asyncio; from sqlalchemy.ext.asyncio import create_async_engine; from sqlalchemy import text; import urdhva_base.settings as s; u=s.settings.db_urls['postgres_async'][0]; print('USING:', u); async def m():\n e=create_async_engine(u, connect_args={'timeout':5})\n try:\n  async with e.connect() as c:\n   print('NOVEX CONNECT OK:', (await c.execute(text('select 1'))).fetchone())\n except Exception as ex:\n  print('NOVEX CONNECT FAIL:', repr(ex))\n await e.dispose()\nasyncio.run(m())\"" 2>&1 || echo "NOVEX TEST FAILED"
+
+            echo "=== last api.log lines around DB errors ==="
+            sudo docker exec app-container tail -n 30 /var/log/api.log 2>/dev/null || true
