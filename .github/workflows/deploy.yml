@@ -1,17 +1,3 @@
-##############################################################################
-# deploy.yml — NOVEX CI/CD pipeline
-#
-# Jobs:
-#   build-and-push  Build Docker image and push to GHCR
-#   deploy          Pull image on remote server, restart container, verify
-#
-# Required GitHub Secrets:
-#   GHCR_PAT          Personal access token with read:packages + write:packages
-#   DEPLOY_HOST       IP or hostname of the deployment server
-#   DEPLOY_USER       SSH username (e.g. root or ubuntu)
-#   DEPLOY_PASSWORD   SSH password (prefer key-based auth in production)
-##############################################################################
-
 name: Build and Deploy Application
 
 on:
@@ -28,7 +14,8 @@ env:
   IMAGE_NAME: ${{ github.repository }}
 
 jobs:
-  # ── Stage 1: Build & push Docker image to GHCR ───────────────────────────────
+
+  # ── Job 1: Build Docker image and push to GHCR ──────────────────────────────
   build-and-push:
     runs-on: ubuntu-latest
     permissions:
@@ -42,7 +29,7 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Log in to GHCR Container Registry
+      - name: Log in to GHCR
         if: github.event_name != 'pull_request'
         uses: docker/login-action@v3
         with:
@@ -69,45 +56,38 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-  # ── Stage 2: Deploy to server ────────────────────────────────────────────────
+  # ── Job 2: Deploy to production server ──────────────────────────────────────
   deploy:
     needs: build-and-push
     if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
     runs-on: ubuntu-latest
 
     steps:
-      - name: SSH and deploy to target server
+      - name: Deploy to server via SSH
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.DEPLOY_HOST }}
           username: ${{ secrets.DEPLOY_USER }}
           password: ${{ secrets.DEPLOY_PASSWORD }}
           port: 22
-          # Allow up to 10 minutes for the full deploy + healthcheck sequence
           command_timeout: 10m
           script: |
             set -e
 
-            # ── 1. Normalise image name (must be lowercase for GHCR) ──────────
             IMAGE=$(echo "ghcr.io/${{ github.repository }}" | tr '[:upper:]' '[:lower:]')
-            echo "==> Deploying image: ${IMAGE}:latest"
+            echo "==> Image: ${IMAGE}:latest"
 
-            # ── 2. Login to GHCR and pull latest image ───────────────────────
+            # Login and pull latest image
             echo "${{ secrets.GHCR_PAT }}" | sudo docker login ghcr.io \
-              -u "${{ github.actor }}" \
-              --password-stdin
-
-            echo "==> Pulling latest image..."
+              -u "${{ github.actor }}" --password-stdin
             sudo docker pull ${IMAGE}:latest
 
-            # ── 3. Stop and remove the existing container (if any) ────────────
-            echo "==> Stopping existing container (if running)..."
+            # Stop and remove old container
             sudo docker stop app-container 2>/dev/null || true
             sudo docker rm   app-container 2>/dev/null || true
             sudo mkdir -p /opt/digitaltwin_images
 
-            # ── 4. Start the new container ────────────────────────────────────
-            echo "==> Starting new container..."
+            # Start new container
             sudo docker run -d \
               --name app-container \
               --restart unless-stopped \
@@ -115,100 +95,45 @@ jobs:
               -v /opt/digitaltwin_images:/opt/digitaltwin_images \
               ${IMAGE}:latest
 
-            # ─────────────────────────────────────────────────────────────────
-            # STAGE 1: Nginx Frontend — http://165.101.248.89:5378/health
-            # We use the dedicated /health endpoint (not /) so that nginx
-            # does not need to serve the full SPA before we consider it "up".
-            # supervisord starts redis(10) → api(20, startsecs=10) → nginx(30,
-            # startsecs=5). Total worst-case startup is ~30 s; allow 120 s.
-            # ─────────────────────────────────────────────────────────────────
-            echo "================================================="
-            echo "STAGE 1: Verifying Nginx Frontend (Port 5378)..."
-            echo "================================================="
-            MAX_RETRIES=24
-            RETRY_INTERVAL=5
-            for i in $(seq 1 ${MAX_RETRIES}); do
-              HEALTH_STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:5378/health 2>/dev/null || echo "000")
-              if [ "$HEALTH_STATUS" = "200" ]; then
-                echo "✅ NOVEX Dashboard nginx is live (HTTP ${HEALTH_STATUS}) after $((i * RETRY_INTERVAL))s"
+            # ── Wait for nginx to be ready (max 120s) ────────────────────────
+            echo "Waiting for http://165.101.248.89:5378/ ..."
+            for i in $(seq 1 24); do
+              STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:5378/health || echo "000")
+              if [ "$STATUS" = "200" ]; then
+                echo "✅ Frontend is live (HTTP $STATUS)"
                 break
               fi
-              echo "    Waiting for nginx (HTTP ${HEALTH_STATUS}), attempt ${i}/${MAX_RETRIES}..."
-              sleep ${RETRY_INTERVAL}
-              if [ "$i" -eq "${MAX_RETRIES}" ]; then
-                echo "❌ Nginx frontend failed to respond within $((MAX_RETRIES * RETRY_INTERVAL))s"
-                echo "--- supervisorctl status ---"
+              echo "   attempt $i/24 — HTTP $STATUS"
+              sleep 5
+              if [ "$i" -eq 24 ]; then
+                echo "❌ Frontend did not start in 120s"
                 sudo docker exec app-container supervisorctl status || true
-                echo "--- api.log (last 100 lines) ---"
                 sudo docker exec app-container tail -n 100 /var/log/api.log || true
-                echo "--- nginx_error.log (last 50 lines) ---"
-                sudo docker exec app-container tail -n 50 /var/log/nginx_error.log || true
-                echo "--- docker logs ---"
-                sudo docker logs --tail 100 app-container || true
+                sudo docker logs --tail 100 app-container
                 exit 1
               fi
             done
 
-            # ─────────────────────────────────────────────────────────────────
-            # STAGE 2: FastAPI Swagger UI through nginx (/docs)
-            # Use -L to follow the 307 redirect (/docs → /docs/) that FastAPI
-            # sends. A non-200 here is a WARNING not a hard failure — nginx is
-            # already confirmed up; FastAPI may still be loading routes.
-            # ─────────────────────────────────────────────────────────────────
-            echo "================================================="
-            echo "STAGE 2: Verifying FastAPI Swagger UI via Nginx..."
-            echo "================================================="
-            DOCS_STATUS=$(curl -s -o /dev/null -w "%{http_code}" -L http://127.0.0.1:5378/docs 2>/dev/null || echo "000")
-            if [ "$DOCS_STATUS" = "200" ]; then
-              echo "✅ FastAPI Swagger UI reachable at http://165.101.248.89:5378/docs (HTTP ${DOCS_STATUS})"
-            else
-              echo "⚠️  /docs returned HTTP ${DOCS_STATUS} — FastAPI may still be warming up"
-            fi
+            # ── Verify Swagger UI ─────────────────────────────────────────────
+            DOCS=$(curl -s -o /dev/null -w "%{http_code}" -L http://127.0.0.1:5378/docs || echo "000")
+            [ "$DOCS" = "200" ] \
+              && echo "✅ Swagger UI  http://165.101.248.89:5378/docs  (HTTP $DOCS)" \
+              || echo "⚠️  Swagger UI returned HTTP $DOCS"
 
-            # ─────────────────────────────────────────────────────────────────
-            # STAGE 3: Direct FastAPI port 8002
-            # Checks that uvicorn is bound to 0.0.0.0:8002 (not just loopback)
-            # so the port is reachable on the public interface.
-            # ─────────────────────────────────────────────────────────────────
-            echo "================================================="
-            echo "STAGE 3: Checking Direct FastAPI Port (8002)..."
-            echo "================================================="
-            DIRECT_STATUS=$(curl -s -o /dev/null -w "%{http_code}" -L http://127.0.0.1:8002/docs 2>/dev/null || echo "000")
-            if [ "$DIRECT_STATUS" = "200" ]; then
-              echo "✅ FastAPI direct access OK at http://165.101.248.89:8002/docs (HTTP ${DIRECT_STATUS})"
-            else
-              echo "⚠️  :8002/docs returned HTTP ${DIRECT_STATUS}"
-            fi
+            # ── Verify FastAPI direct port ────────────────────────────────────
+            DIRECT=$(curl -s -o /dev/null -w "%{http_code}" -L http://127.0.0.1:8002/docs || echo "000")
+            [ "$DIRECT" = "200" ] \
+              && echo "✅ FastAPI direct  http://165.101.248.89:8002/docs  (HTTP $DIRECT)" \
+              || echo "⚠️  FastAPI direct returned HTTP $DIRECT"
 
-            # Confirm uvicorn is actually bound on 0.0.0.0 (not just 127.0.0.1)
-            echo "Checking whether uvicorn is bound to 0.0.0.0:8002..."
-            if sudo docker exec app-container sh -c "ss -ltnp 2>/dev/null | grep ':8002'" | grep -q "0.0.0.0"; then
-              echo "✅ uvicorn bound to 0.0.0.0:8002 — externally reachable."
-            else
-              echo "⚠️  Port 8002 not bound to 0.0.0.0 — external clients may not reach /docs directly."
-            fi
+            # ── Verify OpenAPI schema ─────────────────────────────────────────
+            OAS=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:5378/openapi.json || echo "000")
+            [ "$OAS" = "200" ] \
+              && echo "✅ OpenAPI schema  http://165.101.248.89:5378/openapi.json  (HTTP $OAS)" \
+              || echo "⚠️  OpenAPI schema returned HTTP $OAS"
 
-            # ─────────────────────────────────────────────────────────────────
-            # STAGE 4: OpenAPI JSON schema
-            # ─────────────────────────────────────────────────────────────────
-            echo "================================================="
-            echo "STAGE 4: Verifying OpenAPI JSON Schema..."
-            echo "================================================="
-            OPENAPI_STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:5378/openapi.json 2>/dev/null || echo "000")
-            if [ "$OPENAPI_STATUS" = "200" ]; then
-              echo "✅ All OpenAPI schema routes loaded successfully (HTTP ${OPENAPI_STATUS})"
-            else
-              echo "⚠️  /openapi.json returned HTTP ${OPENAPI_STATUS}"
-            fi
-
-            # ─────────────────────────────────────────────────────────────────
-            # Summary
-            # ─────────────────────────────────────────────────────────────────
+            # ── Summary ───────────────────────────────────────────────────────
             echo ""
-            echo "==> ✅ Deployment complete!"
-            echo "--- supervisorctl status ---"
+            echo "✅ Deployment complete — http://165.101.248.89:5378/"
             sudo docker exec app-container supervisorctl status || true
-
-            # Reclaim disk space used by old dangling images
-            echo "==> Pruning unused Docker images..."
             sudo docker image prune -f
