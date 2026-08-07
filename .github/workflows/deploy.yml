@@ -77,7 +77,7 @@ jobs:
             IMAGE=$(echo "ghcr.io/${{ github.repository }}" | tr '[:upper:]' '[:lower:]')
             echo "==> Image: ${IMAGE}:latest"
 
-            # Login and pull latest image
+            # Pull latest image
             echo "${{ secrets.GHCR_PAT }}" | sudo docker login ghcr.io \
               -u "${{ github.actor }}" --password-stdin
             sudo docker pull ${IMAGE}:latest
@@ -95,18 +95,18 @@ jobs:
               -v /opt/digitaltwin_images:/opt/digitaltwin_images \
               ${IMAGE}:latest
 
-            # ── Wait for nginx to be ready (max 120s) ────────────────────────
-            echo "Waiting for http://165.101.248.89:5378/ ..."
+            # ── Wait for nginx to become ready (max 120s) ────────────────────
+            echo "==> Waiting for http://165.101.248.89:5378/ ..."
             for i in $(seq 1 24); do
               STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:5378/health || echo "000")
               if [ "$STATUS" = "200" ]; then
-                echo "✅ Frontend is live (HTTP $STATUS)"
+                echo "✅ Frontend is live at http://165.101.248.89:5378/ (HTTP $STATUS)"
                 break
               fi
               echo "   attempt $i/24 — HTTP $STATUS"
               sleep 5
               if [ "$i" -eq 24 ]; then
-                echo "❌ Frontend did not start in 120s"
+                echo "❌ Frontend did not start within 120s"
                 sudo docker exec app-container supervisorctl status || true
                 sudo docker exec app-container tail -n 100 /var/log/api.log || true
                 sudo docker logs --tail 100 app-container
@@ -114,25 +114,25 @@ jobs:
               fi
             done
 
-            # ── Verify Swagger UI ─────────────────────────────────────────────
+            # ── Verify Swagger UI at http://165.101.248.89:5378/docs ─────────
             DOCS=$(curl -s -o /dev/null -w "%{http_code}" -L http://127.0.0.1:5378/docs || echo "000")
             [ "$DOCS" = "200" ] \
-              && echo "✅ Swagger UI  http://165.101.248.89:5378/docs  (HTTP $DOCS)" \
-              || echo "⚠️  Swagger UI returned HTTP $DOCS"
+              && echo "✅ Swagger UI — http://165.101.248.89:5378/docs (HTTP $DOCS)" \
+              || echo "⚠️  /docs returned HTTP $DOCS"
 
-            # ── Verify FastAPI direct port ────────────────────────────────────
+            # ── Verify FastAPI direct at http://165.101.248.89:8002/docs ─────
             DIRECT=$(curl -s -o /dev/null -w "%{http_code}" -L http://127.0.0.1:8002/docs || echo "000")
             [ "$DIRECT" = "200" ] \
-              && echo "✅ FastAPI direct  http://165.101.248.89:8002/docs  (HTTP $DIRECT)" \
-              || echo "⚠️  FastAPI direct returned HTTP $DIRECT"
+              && echo "✅ FastAPI direct — http://165.101.248.89:8002/docs (HTTP $DIRECT)" \
+              || echo "⚠️  :8002/docs returned HTTP $DIRECT"
 
             # ── Verify OpenAPI schema ─────────────────────────────────────────
             OAS=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:5378/openapi.json || echo "000")
             [ "$OAS" = "200" ] \
-              && echo "✅ OpenAPI schema  http://165.101.248.89:5378/openapi.json  (HTTP $OAS)" \
-              || echo "⚠️  OpenAPI schema returned HTTP $OAS"
+              && echo "✅ OpenAPI schema — http://165.101.248.89:5378/openapi.json (HTTP $OAS)" \
+              || echo "⚠️  /openapi.json returned HTTP $OAS"
 
-            # ── Summary ───────────────────────────────────────────────────────
+            # ── Done ──────────────────────────────────────────────────────────
             echo ""
             echo "✅ Deployment complete — http://165.101.248.89:5378/"
             sudo docker exec app-container supervisorctl status || true
