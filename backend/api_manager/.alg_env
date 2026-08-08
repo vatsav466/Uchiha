@@ -1,5 +1,4 @@
 db_urls={"postgres_async": ["postgresql+asyncpg://localhost:5432/hpcl_ceg?user=novex&password=UUDrftkiJLPM59jD"], "redis": ["redis://localhost:6379"]}
-import_paths={"base_path": "/opt/ceg/algo/", "api_path": "/opt/ceg/algo/api_manager", "vendor_ingest_path": "/opt/ceg/algo/vendor_ingestion_api", "ceg_role_api_path": "/opt/ceg/algo//ceg_role_master_api/"}
 things_board_url="http://140.245.238.142:8080"
 things_board_username="tenant@thingsboard.org"
 things_board_password="Algo#@70"
